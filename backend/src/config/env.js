@@ -2,7 +2,11 @@ const { z } = require('zod');
 
 const envSchema = z.object({
   PORT: z.string().default('5000'),
-  DATABASE_URL: z.string().url(),
+  DB_HOST: z.string(),
+  DB_PORT: z.string().default('5432'),
+  DB_NAME: z.string(),
+  DB_USER: z.string(),
+  DB_PASSWORD: z.string(),
   JWT_SECRET: z.string().min(16),
   JWT_EXPIRES_IN: z.string().default('7d'),
   ANTHROPIC_API_KEY: z.string().optional(),
