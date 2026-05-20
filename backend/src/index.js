@@ -28,7 +28,7 @@ const io = new Server(server, {
 app.set('io', io);
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL,
+  origin: [process.env.FRONTEND_URL, "http://localhost:3000"],
   credentials: true,
 }));
 app.use(express.json());
@@ -69,7 +69,7 @@ io.on('connection', (socket) => {
     socket.join('admin');
   });
 
-  socket.on('disconnect', () => {});
+  socket.on('disconnect', () => { });
 });
 
 const PORT = process.env.PORT || 5000;
