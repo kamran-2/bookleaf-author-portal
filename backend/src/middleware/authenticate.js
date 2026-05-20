@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
-const pool = require('../config/db');
+const { eq } = require('drizzle-orm');
+const db = require('../config/db');
+const { users } = require('../db/schema');
 
 async function authenticate(req, res, next) {
   const header = req.headers.authorization;
@@ -16,14 +18,20 @@ async function authenticate(req, res, next) {
   }
 
   try {
-    const { rows } = await pool.query(
-      'SELECT id, email, name, role, phone, city, author_id, joined_date FROM users WHERE id = $1',
-      [payload.sub]
-    );
-    if (rows.length === 0) {
+    const result = await db
+      .select({
+        id: users.id, email: users.email, name: users.name, role: users.role,
+        phone: users.phone, city: users.city, author_id: users.author_id,
+        joined_date: users.joined_date,
+      })
+      .from(users)
+      .where(eq(users.id, payload.sub))
+      .limit(1);
+
+    if (result.length === 0) {
       return res.status(401).json({ error: 'User no longer exists' });
     }
-    req.user = rows[0];
+    req.user = result[0];
     next();
   } catch (err) {
     next(err);

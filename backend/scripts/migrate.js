@@ -1,6 +1,7 @@
+require('dotenv').config();
 const { Pool } = require('pg');
 const { drizzle } = require('drizzle-orm/node-postgres');
-const schema = require('../db/schema');
+const { migrate } = require('drizzle-orm/node-postgres/migrator');
 
 const pool = new Pool(
   process.env.DATABASE_URL
@@ -19,8 +20,13 @@ const pool = new Pool(
       }
 );
 
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL client error:', err.message);
-});
+async function main() {
+  const db = drizzle(pool);
+  console.log('Running migrations...');
+  await migrate(db, { migrationsFolder: './drizzle' });
+  console.log('Migrations complete.');
+}
 
-module.exports = drizzle(pool, { schema });
+main()
+  .catch(err => { console.error('Migration failed:', err.message); process.exit(1); })
+  .finally(() => pool.end());

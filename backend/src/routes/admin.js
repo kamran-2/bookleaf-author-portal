@@ -1,6 +1,9 @@
 const router = require('express').Router();
 const { z } = require('zod');
-const pool = require('../config/db');
+const { eq, and, asc, isNull, gte, lte, sql } = require('drizzle-orm');
+const { alias } = require('drizzle-orm/pg-core');
+const db = require('../config/db');
+const { users, books, tickets, ticketResponses, internalNotes } = require('../db/schema');
 const authenticate = require('../middleware/authenticate');
 const requireRole = require('../middleware/requireRole');
 const { generateDraftResponse } = require('../services/aiService');
@@ -8,137 +11,122 @@ const { generateDraftResponse } = require('../services/aiService');
 router.use(authenticate);
 router.use(requireRole('admin'));
 
+// Table aliases for joins where users appears more than once
+const authorAlias     = alias(users, 'author_u');
+const assigneeAlias   = alias(users, 'assignee_u');
+const noteAuthorAlias = alias(users, 'note_author_u');
+
 // ─── Ticket Queue ──────────────────────────────────────────────────────────
 
 // GET /api/admin/tickets
 // Query params: status, category, priority, assigned_to, from, to, page, limit
 router.get('/tickets', async (req, res, next) => {
   try {
-    const {
-      status, category, priority, assigned_to,
-      from, to,
-      page = 1, limit = 20,
-    } = req.query;
+    const { status, category, priority, assigned_to, from, to, page = 1, limit = 20 } = req.query;
 
     const conditions = [];
-    const params = [];
+    if (status)   conditions.push(eq(tickets.status, status));
+    if (category) conditions.push(eq(tickets.category, category));
+    if (priority) conditions.push(eq(tickets.priority, priority));
+    if (assigned_to === 'me')          conditions.push(eq(tickets.assigned_to, req.user.id));
+    if (assigned_to === 'unassigned')  conditions.push(isNull(tickets.assigned_to));
+    if (from) conditions.push(gte(tickets.created_at, new Date(from)));
+    if (to)   conditions.push(lte(tickets.created_at, new Date(to)));
 
-    if (status)      { params.push(status);      conditions.push(`t.status = $${params.length}::ticket_status`); }
-    if (category)    { params.push(category);    conditions.push(`t.category = $${params.length}::ticket_category`); }
-    if (priority)    { params.push(priority);    conditions.push(`t.priority = $${params.length}::ticket_priority`); }
-    if (assigned_to === 'me')  { params.push(req.user.id); conditions.push(`t.assigned_to = $${params.length}`); }
-    if (assigned_to === 'unassigned') { conditions.push(`t.assigned_to IS NULL`); }
-    if (from) { params.push(from); conditions.push(`t.created_at >= $${params.length}`); }
-    if (to)   { params.push(to);   conditions.push(`t.created_at <= $${params.length}`); }
-
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const offset = (Math.max(1, parseInt(page)) - 1) * Math.min(100, parseInt(limit));
+    const where    = conditions.length ? and(...conditions) : undefined;
     const limitVal = Math.min(100, parseInt(limit));
+    const offset   = (Math.max(1, parseInt(page)) - 1) * limitVal;
 
-    params.push(limitVal, offset);
+    const rows = await db
+      .select({
+        id: tickets.id, subject: tickets.subject, description: tickets.description,
+        status: tickets.status, category: tickets.category, ai_category: tickets.ai_category,
+        priority: tickets.priority, ai_priority: tickets.ai_priority,
+        ai_processed: tickets.ai_processed,
+        created_at: tickets.created_at, updated_at: tickets.updated_at,
+        author_name: authorAlias.name, author_email: authorAlias.email, author_city: authorAlias.city,
+        book_title: books.title, book_ref: books.book_id,
+        assigned_to_name: assigneeAlias.name,
+        response_count: sql`(SELECT COUNT(*) FROM ticket_responses tr WHERE tr.ticket_id = ${tickets.id})`,
+      })
+      .from(tickets)
+      .innerJoin(authorAlias,   eq(authorAlias.id, tickets.author_id))
+      .leftJoin(books,          eq(books.id, tickets.book_id))
+      .leftJoin(assigneeAlias,  eq(assigneeAlias.id, tickets.assigned_to))
+      .where(where)
+      .orderBy(
+        sql`CASE ${tickets.priority} WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 WHEN 'Low' THEN 4 END`,
+        tickets.created_at
+      )
+      .limit(limitVal)
+      .offset(offset);
 
-    const { rows } = await pool.query(
-      `SELECT
-         t.id, t.subject, t.description, t.status, t.category, t.ai_category,
-         t.priority, t.ai_priority, t.ai_processed, t.created_at, t.updated_at,
-         u.name  AS author_name,
-         u.email AS author_email,
-         u.city  AS author_city,
-         b.title AS book_title,
-         b.book_id AS book_ref,
-         a.name  AS assigned_to_name,
-         (SELECT COUNT(*) FROM ticket_responses tr WHERE tr.ticket_id = t.id) AS response_count
-       FROM tickets t
-       JOIN  users u ON u.id = t.author_id
-       LEFT JOIN books  b ON b.id = t.book_id
-       LEFT JOIN users  a ON a.id = t.assigned_to
-       ${where}
-       ORDER BY
-         CASE t.priority
-           WHEN 'Critical' THEN 1
-           WHEN 'High'     THEN 2
-           WHEN 'Medium'   THEN 3
-           WHEN 'Low'      THEN 4
-         END ASC,
-         t.created_at ASC
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params
-    );
-
-    // Total count for pagination
-    const countParams = params.slice(0, params.length - 2);
-    const { rows: countRows } = await pool.query(
-      `SELECT COUNT(*) FROM tickets t ${where}`,
-      countParams
-    );
+    const [{ count }] = await db
+      .select({ count: sql`COUNT(*)` })
+      .from(tickets)
+      .where(where);
 
     res.json({
       tickets: rows,
-      pagination: {
-        total: parseInt(countRows[0].count),
-        page: parseInt(page),
-        limit: limitVal,
-      },
+      pagination: { total: parseInt(count), page: parseInt(page), limit: limitVal },
     });
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/admin/tickets/:id  — full detail with responses + internal notes
+// GET /api/admin/tickets/:id — full detail with responses + internal notes
 router.get('/tickets/:id', async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT
-         t.*,
-         u.name  AS author_name,
-         u.email AS author_email,
-         u.phone AS author_phone,
-         u.city  AS author_city,
-         u.author_id AS author_ref,
-         b.title AS book_title,
-         b.book_id AS book_ref,
-         b.isbn  AS book_isbn,
-         b.genre AS book_genre,
-         b.status AS book_status,
-         b.total_copies_sold,
-         b.royalty_pending,
-         a.name  AS assigned_to_name
-       FROM tickets t
-       JOIN  users u ON u.id = t.author_id
-       LEFT JOIN books b ON b.id = t.book_id
-       LEFT JOIN users a ON a.id = t.assigned_to
-       WHERE t.id = $1`,
-      [req.params.id]
-    );
+    const result = await db
+      .select({
+        id: tickets.id, author_id: tickets.author_id, book_id: tickets.book_id,
+        subject: tickets.subject, description: tickets.description,
+        status: tickets.status, category: tickets.category, ai_category: tickets.ai_category,
+        priority: tickets.priority, ai_priority: tickets.ai_priority,
+        assigned_to: tickets.assigned_to, ai_draft_response: tickets.ai_draft_response,
+        ai_processed: tickets.ai_processed,
+        created_at: tickets.created_at, updated_at: tickets.updated_at,
+        author_name: authorAlias.name, author_email: authorAlias.email,
+        author_phone: authorAlias.phone, author_city: authorAlias.city,
+        author_ref: authorAlias.author_id,
+        book_title: books.title, book_ref: books.book_id, book_isbn: books.isbn,
+        book_genre: books.genre, book_status: books.status,
+        total_copies_sold: books.total_copies_sold, royalty_pending: books.royalty_pending,
+        assigned_to_name: assigneeAlias.name,
+      })
+      .from(tickets)
+      .innerJoin(authorAlias,   eq(authorAlias.id, tickets.author_id))
+      .leftJoin(books,          eq(books.id, tickets.book_id))
+      .leftJoin(assigneeAlias,  eq(assigneeAlias.id, tickets.assigned_to))
+      .where(eq(tickets.id, req.params.id))
+      .limit(1);
 
-    if (rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
     const [responses, notes] = await Promise.all([
-      pool.query(
-        `SELECT tr.id, tr.body, tr.created_at, u.name AS responder_name
-         FROM ticket_responses tr
-         JOIN users u ON u.id = tr.responder_id
-         WHERE tr.ticket_id = $1 ORDER BY tr.created_at ASC`,
-        [req.params.id]
-      ),
-      pool.query(
-        `SELECT n.id, n.body, n.created_at, u.name AS author_name
-         FROM internal_notes n
-         JOIN users u ON u.id = n.author_id
-         WHERE n.ticket_id = $1 ORDER BY n.created_at ASC`,
-        [req.params.id]
-      ),
+      db.select({
+          id: ticketResponses.id, body: ticketResponses.body,
+          created_at: ticketResponses.created_at, responder_name: users.name,
+        })
+        .from(ticketResponses)
+        .innerJoin(users, eq(users.id, ticketResponses.responder_id))
+        .where(eq(ticketResponses.ticket_id, req.params.id))
+        .orderBy(asc(ticketResponses.created_at)),
+
+      db.select({
+          id: internalNotes.id, body: internalNotes.body,
+          created_at: internalNotes.created_at, author_name: noteAuthorAlias.name,
+        })
+        .from(internalNotes)
+        .innerJoin(noteAuthorAlias, eq(noteAuthorAlias.id, internalNotes.author_id))
+        .where(eq(internalNotes.ticket_id, req.params.id))
+        .orderBy(asc(internalNotes.created_at)),
     ]);
 
-    res.json({
-      ticket: rows[0],
-      responses: responses.rows,
-      notes: notes.rows,
-    });
+    res.json({ ticket: result[0], responses, notes });
   } catch (err) {
     next(err);
   }
@@ -147,16 +135,12 @@ router.get('/tickets/:id', async (req, res, next) => {
 // ─── Ticket Management ─────────────────────────────────────────────────────
 
 const updateTicketSchema = z.object({
-  status:   z.enum(['Open', 'In Progress', 'Resolved', 'Closed']).optional(),
-  category: z.enum([
-    'Royalty & Payments',
-    'ISBN & Metadata Issues',
-    'Printing & Quality',
-    'Distribution & Availability',
-    'Book Status & Production Updates',
-    'General Inquiry',
+  status:       z.enum(['Open', 'In Progress', 'Resolved', 'Closed']).optional(),
+  category:     z.enum([
+    'Royalty & Payments', 'ISBN & Metadata Issues', 'Printing & Quality',
+    'Distribution & Availability', 'Book Status & Production Updates', 'General Inquiry',
   ]).optional(),
-  priority: z.enum(['Critical', 'High', 'Medium', 'Low']).optional(),
+  priority:     z.enum(['Critical', 'High', 'Medium', 'Low']).optional(),
   assign_to_me: z.boolean().optional(),
   unassign:     z.boolean().optional(),
 }).refine(d => Object.keys(d).length > 0, { message: 'Provide at least one field to update' });
@@ -168,49 +152,40 @@ router.patch('/tickets/:id', async (req, res, next) => {
     if (!parsed.success) {
       return res.status(400).json({
         error: 'Validation failed',
-        details: parsed.error.flatten().fieldErrors,
+        details: z.flattenError(parsed.error).fieldErrors,
       });
     }
 
     const { status, category, priority, assign_to_me, unassign } = parsed.data;
 
-    const sets = [];
-    const params = [];
+    const updates = {};
+    if (status)       updates.status      = status;
+    if (category)     updates.category    = category;
+    if (priority)     updates.priority    = priority;
+    if (assign_to_me) updates.assigned_to = req.user.id;
+    if (unassign)     updates.assigned_to = null;
+    updates.updated_at = new Date();
 
-    if (status)   { params.push(status);   sets.push(`status = $${params.length}::ticket_status`); }
-    if (category) { params.push(category); sets.push(`category = $${params.length}::ticket_category`); }
-    if (priority) { params.push(priority); sets.push(`priority = $${params.length}::ticket_priority`); }
-
-    if (assign_to_me) { params.push(req.user.id); sets.push(`assigned_to = $${params.length}`); }
-    if (unassign)     { sets.push(`assigned_to = NULL`); }
-
-    if (sets.length === 0) {
+    if (Object.keys(updates).length === 1) {  // only updated_at means nothing real changed
       return res.status(400).json({ error: 'Nothing to update' });
     }
 
-    sets.push(`updated_at = NOW()`);
-    params.push(req.params.id);
+    const result = await db
+      .update(tickets)
+      .set(updates)
+      .where(eq(tickets.id, req.params.id))
+      .returning();
 
-    const { rows } = await pool.query(
-      `UPDATE tickets SET ${sets.join(', ')}
-       WHERE id = $${params.length}
-       RETURNING *`,
-      params
-    );
-
-    if (rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
-    const ticket = rows[0];
+    const ticket = result[0];
 
-    // Notify author of status change via Socket.io
     const io = req.app.get('io');
     if (io && status) {
       io.to(`author:${ticket.author_id}`).emit('ticket:updated', {
-        id: ticket.id,
-        status: ticket.status,
-        updated_at: ticket.updated_at,
+        id: ticket.id, status: ticket.status, updated_at: ticket.updated_at,
       });
     }
 
@@ -222,55 +197,46 @@ router.patch('/tickets/:id', async (req, res, next) => {
 
 // ─── Responses ─────────────────────────────────────────────────────────────
 
-const responseSchema = z.object({
-  body: z.string().min(1).max(10000),
-});
+const responseSchema = z.object({ body: z.string().min(1).max(10000) });
 
-// POST /api/admin/tickets/:id/responses  — send reply to author
+// POST /api/admin/tickets/:id/responses — send reply visible to author
 router.post('/tickets/:id/responses', async (req, res, next) => {
   try {
     const parsed = responseSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({
         error: 'Validation failed',
-        details: parsed.error.flatten().fieldErrors,
+        details: z.flattenError(parsed.error).fieldErrors,
       });
     }
 
-    // Confirm ticket exists
-    const { rows: ticketRows } = await pool.query(
-      'SELECT id, author_id FROM tickets WHERE id = $1',
-      [req.params.id]
-    );
-    if (ticketRows.length === 0) {
+    const existing = await db
+      .select({ id: tickets.id, author_id: tickets.author_id })
+      .from(tickets)
+      .where(eq(tickets.id, req.params.id))
+      .limit(1);
+    if (existing.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO ticket_responses (ticket_id, responder_id, body)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [req.params.id, req.user.id, parsed.data.body]
-    );
+    const [row] = await db
+      .insert(ticketResponses)
+      .values({ ticket_id: req.params.id, responder_id: req.user.id, body: parsed.data.body })
+      .returning();
 
-    const response = { ...rows[0], responder_name: req.user.name };
+    const response = { ...row, responder_name: req.user.name };
 
-    // Move ticket to "In Progress" if still Open
-    await pool.query(
-      `UPDATE tickets SET status = 'In Progress', updated_at = NOW()
-       WHERE id = $1 AND status = 'Open'`,
-      [req.params.id]
-    );
+    // Auto-advance status from Open → In Progress on first admin reply
+    await db
+      .update(tickets)
+      .set({ status: 'In Progress', updated_at: new Date() })
+      .where(and(eq(tickets.id, req.params.id), eq(tickets.status, 'Open')));
 
-    // Notify author and admin rooms in real-time
     const io = req.app.get('io');
     if (io) {
-      const authorId = ticketRows[0].author_id;
+      const authorId = existing[0].author_id;
       io.to(`ticket:${req.params.id}`).emit('ticket:response', response);
-      io.to(`author:${authorId}`).emit('ticket:response', {
-        ticket_id: req.params.id,
-        ...response,
-      });
+      io.to(`author:${authorId}`).emit('ticket:response', { ticket_id: req.params.id, ...response });
       io.to('admin').emit('ticket:response', { ticket_id: req.params.id, ...response });
     }
 
@@ -282,39 +248,35 @@ router.post('/tickets/:id/responses', async (req, res, next) => {
 
 // ─── Internal Notes ────────────────────────────────────────────────────────
 
-const noteSchema = z.object({
-  body: z.string().min(1).max(5000),
-});
+const noteSchema = z.object({ body: z.string().min(1).max(5000) });
 
-// POST /api/admin/tickets/:id/notes  — admin-only internal note
+// POST /api/admin/tickets/:id/notes — admin-only, never exposed to authors
 router.post('/tickets/:id/notes', async (req, res, next) => {
   try {
     const parsed = noteSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({
         error: 'Validation failed',
-        details: parsed.error.flatten().fieldErrors,
+        details: z.flattenError(parsed.error).fieldErrors,
       });
     }
 
-    const { rows: ticketRows } = await pool.query(
-      'SELECT id FROM tickets WHERE id = $1',
-      [req.params.id]
-    );
-    if (ticketRows.length === 0) {
+    const existing = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(eq(tickets.id, req.params.id))
+      .limit(1);
+    if (existing.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO internal_notes (ticket_id, author_id, body)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [req.params.id, req.user.id, parsed.data.body]
-    );
+    const [row] = await db
+      .insert(internalNotes)
+      .values({ ticket_id: req.params.id, author_id: req.user.id, body: parsed.data.body })
+      .returning();
 
-    const note = { ...rows[0], author_name: req.user.name };
+    const note = { ...row, author_name: req.user.name };
 
-    // Notify other admins only
     const io = req.app.get('io');
     if (io) {
       io.to('admin').emit('ticket:note', { ticket_id: req.params.id, ...note });
@@ -326,45 +288,49 @@ router.post('/tickets/:id/notes', async (req, res, next) => {
   }
 });
 
-// ─── AI Draft Response ─────────────────────────────────────────────────────
+// ─── AI Draft ──────────────────────────────────────────────────────────────
 
-// POST /api/admin/tickets/:id/ai-draft  — generate (or re-generate) AI draft
+// POST /api/admin/tickets/:id/ai-draft — generate (or re-generate) AI draft
 router.post('/tickets/:id/ai-draft', async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT t.*, b.title AS book_title, b.genre, b.status AS book_status,
-              b.royalty_pending, b.total_copies_sold, b.mrp,
-              u.name AS author_name
-       FROM tickets t
-       LEFT JOIN books b ON b.id = t.book_id
-       JOIN users u ON u.id = t.author_id
-       WHERE t.id = $1`,
-      [req.params.id]
-    );
+    const result = await db
+      .select({
+        id: tickets.id, subject: tickets.subject, description: tickets.description,
+        category: tickets.category, priority: tickets.priority,
+        ai_draft_response: tickets.ai_draft_response,
+        book_title: books.title, book_genre: books.genre, book_status: books.status,
+        royalty_pending: books.royalty_pending,
+        total_copies_sold: books.total_copies_sold, mrp: books.mrp,
+        author_name: authorAlias.name,
+      })
+      .from(tickets)
+      .innerJoin(authorAlias, eq(authorAlias.id, tickets.author_id))
+      .leftJoin(books, eq(books.id, tickets.book_id))
+      .where(eq(tickets.id, req.params.id))
+      .limit(1);
 
-    if (rows.length === 0) {
+    if (result.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
-    const ticket = rows[0];
+    const ticket = result[0];
 
-    const { rows: responses } = await pool.query(
-      `SELECT body FROM ticket_responses WHERE ticket_id = $1 ORDER BY created_at ASC`,
-      [req.params.id]
-    );
+    const responses = await db
+      .select({ body: ticketResponses.body })
+      .from(ticketResponses)
+      .where(eq(ticketResponses.ticket_id, req.params.id))
+      .orderBy(asc(ticketResponses.created_at));
 
     const draft = await generateDraftResponse(ticket, responses);
 
     if (!draft) {
-      // AI unavailable — return existing cached draft or null
-      return res.json({ draft: ticket.ai_draft_response || null, cached: true });
+      return res.json({ draft: ticket.ai_draft_response ?? null, cached: true });
     }
 
-    // Cache the new draft
-    await pool.query(
-      `UPDATE tickets SET ai_draft_response = $1, updated_at = NOW() WHERE id = $2`,
-      [draft, req.params.id]
-    );
+    await db
+      .update(tickets)
+      .set({ ai_draft_response: draft, updated_at: new Date() })
+      .where(eq(tickets.id, req.params.id));
 
     res.json({ draft, cached: false });
   } catch (err) {
@@ -374,23 +340,23 @@ router.post('/tickets/:id/ai-draft', async (req, res, next) => {
 
 // ─── Stats ─────────────────────────────────────────────────────────────────
 
-// GET /api/admin/stats  — overview numbers for admin dashboard
-router.get('/stats', async (req, res, next) => {
+// GET /api/admin/stats — overview counts for the admin dashboard header
+router.get('/stats', async (_req, res, next) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT
-        COUNT(*)                                              AS total,
-        COUNT(*) FILTER (WHERE status = 'Open')              AS open,
-        COUNT(*) FILTER (WHERE status = 'In Progress')       AS in_progress,
-        COUNT(*) FILTER (WHERE status = 'Resolved')          AS resolved,
-        COUNT(*) FILTER (WHERE status = 'Closed')            AS closed,
-        COUNT(*) FILTER (WHERE priority = 'Critical')        AS critical,
-        COUNT(*) FILTER (WHERE priority = 'High')            AS high,
-        COUNT(*) FILTER (WHERE assigned_to IS NULL
-                         AND status NOT IN ('Resolved','Closed')) AS unassigned
-      FROM tickets
-    `);
-    res.json({ stats: rows[0] });
+    const [stats] = await db
+      .select({
+        total:       sql`COUNT(*)`,
+        open:        sql`COUNT(*) FILTER (WHERE ${tickets.status} = 'Open')`,
+        in_progress: sql`COUNT(*) FILTER (WHERE ${tickets.status} = 'In Progress')`,
+        resolved:    sql`COUNT(*) FILTER (WHERE ${tickets.status} = 'Resolved')`,
+        closed:      sql`COUNT(*) FILTER (WHERE ${tickets.status} = 'Closed')`,
+        critical:    sql`COUNT(*) FILTER (WHERE ${tickets.priority} = 'Critical')`,
+        high:        sql`COUNT(*) FILTER (WHERE ${tickets.priority} = 'High')`,
+        unassigned:  sql`COUNT(*) FILTER (WHERE ${tickets.assigned_to} IS NULL AND ${tickets.status} NOT IN ('Resolved','Closed'))`,
+      })
+      .from(tickets);
+
+    res.json({ stats });
   } catch (err) {
     next(err);
   }

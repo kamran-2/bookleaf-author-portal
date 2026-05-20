@@ -2,11 +2,13 @@ const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const pool = require('../config/db');
+const { eq } = require('drizzle-orm');
+const db = require('../config/db');
+const { users } = require('../db/schema');
 const authenticate = require('../middleware/authenticate');
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email:    z.email(),
   password: z.string().min(1),
 });
 
@@ -17,19 +19,20 @@ router.post('/login', async (req, res, next) => {
     if (!parsed.success) {
       return res.status(400).json({
         error: 'Validation failed',
-        details: parsed.error.flatten().fieldErrors,
+        details: z.flattenError(parsed.error).fieldErrors,
       });
     }
 
     const { email, password } = parsed.data;
 
-    const { rows } = await pool.query(
-      'SELECT id, email, name, role, password_hash, phone, city, author_id, joined_date FROM users WHERE email = $1',
-      [email.toLowerCase()]
-    );
+    const result = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email.toLowerCase()))
+      .limit(1);
 
-    // Same timing regardless of whether user exists (prevent user enumeration)
-    const user = rows[0];
+    // Constant-time check to prevent user enumeration
+    const user = result[0];
     const hashToCheck = user ? user.password_hash : '$2a$10$dummyhashtopreventtimingattacks';
     const valid = await bcrypt.compare(password, hashToCheck);
 
