@@ -10,14 +10,25 @@ import api from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 
 interface Ticket {
-  id: string; subject: string; status: string; category: string | null;
-  priority: string; author_name: string; author_email: string;
-  book_title: string | null; response_count: string;
-  assigned_to_name: string | null; created_at: string;
+  id: string; 
+  subject: string; 
+  status: string; 
+  category: string | null;
+  priority: string; 
+  author_name: string; 
+  author_email: string;
+  book_title: string | null; 
+  response_count: string;
+  assigned_to_name: string | null;
+  created_at: string;
 }
 interface Stats {
-  total: string; open: string; in_progress: string;
-  resolved: string; critical: string; unassigned: string;
+  total: string;
+  open: string;
+  in_progress: string;
+  resolved: string;
+  critical: string;
+  unassigned: string;
 }
 
 const STATUSES = ['Open', 'In Progress', 'Resolved', 'Closed'];

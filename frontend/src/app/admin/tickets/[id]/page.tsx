@@ -10,17 +10,44 @@ import api from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 
 interface Ticket {
-  id: string; subject: string; description: string; status: string;
-  category: string | null; ai_category: string | null;
-  priority: string; ai_priority: string | null;
-  ai_draft_response: string | null; ai_processed: boolean;
-  author_name: string; author_email: string; author_city: string;
-  book_title: string | null; book_isbn: string | null; book_genre: string | null;
-  book_status: string | null; total_copies_sold: number | null; royalty_pending: number | null;
-  assigned_to_name: string | null; created_at: string; updated_at: string;
+  id: string; 
+  subject: string;
+  description: string;
+  status: string;
+  category: string | null;
+  ai_category: string | null;
+  priority: string;
+  ai_priority: string | null;
+  ai_draft_response: string | null;
+  ai_processed: boolean;
+  author_name: string;
+  author_email: string;
+  author_city: string;
+  book_title: string | null;
+  book_isbn: string | null;
+  book_genre: string | null;
+  book_status: string | null;
+  total_copies_sold: number | null;
+  royalty_pending: number | null;
+  assigned_to_name: string | null;
+  created_at: string;
+  updated_at: string;
 }
-interface Response { id: string; body: string; responder_name: string; responder_role: 'author' | 'admin'; created_at: string; }
-interface Note { id: string; body: string; author_name: string; created_at: string; }
+
+interface Response { 
+    id: string;
+    body: string; 
+    responder_name: string;
+    responder_role: 'author' | 'admin';
+    created_at: string; 
+  }
+
+interface Note { 
+  id: string; 
+  body: string; 
+  author_name: string;
+  created_at: string; 
+}
 
 const STATUSES = ['Open', 'In Progress', 'Resolved', 'Closed'];
 const CATEGORIES = ['Royalty & Payments', 'ISBN & Metadata Issues', 'Printing & Quality', 'Distribution & Availability', 'Book Status & Production Updates', 'General Inquiry'];
