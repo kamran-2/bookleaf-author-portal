@@ -423,7 +423,7 @@ The application is deployed on **AWS EC2** and is live at **https://lazydevelope
 - Drizzle ORM over raw `pg` queries — adds a thin abstraction layer but gives type-safe queries, a proper migration graph, and Drizzle Studio for DB inspection
 
 **How I'd evolve this into production:**
-- Deploy backend on Railway/Render with managed PostgreSQL; frontend on Vercel
+- Deployed backend on EC2 with managed PostgreSQL; frontend on Vercel
 - Add a Redis layer for Socket.io in multi-instance deployments (Socket.io Redis adapter)
 - Replace ephemeral Anthropic prompt caching with a vector DB (pgvector) for semantic search over past tickets — enabling "similar tickets" suggestions to admins
 - Instrument AI call latency, classification accuracy, and token costs in a metrics dashboard (Datadog or similar) so the ops team can measure ROI of the AI layer

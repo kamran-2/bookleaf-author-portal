@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback, use } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import ReactMarkdown from 'react-markdown';
 import { useAuth } from '@/contexts/AuthContext';
 import Navbar from '@/components/Navbar';
 import Badge from '@/components/ui/Badge';
@@ -198,7 +199,9 @@ export default function AdminTicketDetailPage({ params }: { params: Promise<{ id
                     </div>
                     <span className="text-xs text-gray-400">{fmtDate(r.created_at)}</span>
                   </div>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{r.body}</p>
+                  <div className="prose prose-sm max-w-none text-gray-700 [&_p]:mt-1 [&_p]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_strong]:font-semibold [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-bold [&_h2]:font-bold [&_h3]:font-semibold [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:border-gray-300 [&_blockquote]:pl-3 [&_blockquote]:text-gray-500">
+                    <ReactMarkdown>{r.body}</ReactMarkdown>
+                  </div>
                 </div>
               );
             })}
@@ -247,7 +250,9 @@ export default function AdminTicketDetailPage({ params }: { params: Promise<{ id
                             <span className="font-medium">{n.author_name}</span>
                             <span>{fmtDate(n.created_at)}</span>
                           </div>
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{n.body}</p>
+                          <div className="prose prose-sm max-w-none text-gray-700 [&_p]:mt-1 [&_p]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_strong]:font-semibold [&_code]:bg-yellow-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs">
+                            <ReactMarkdown>{n.body}</ReactMarkdown>
+                          </div>
                         </div>
                       ))}
                     </div>
