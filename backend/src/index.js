@@ -7,6 +7,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./swagger');
+
 const authRoutes = require('./routes/auth');
 const authorRoutes = require('./routes/authors');
 const ticketRoutes = require('./routes/tickets');
@@ -35,6 +38,10 @@ app.use(express.json());
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// Swagger UI
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/api/docs.json', (_req, res) => res.json(swaggerSpec));
 
 // Routes
 app.use('/api/auth', authRoutes);
