@@ -19,7 +19,7 @@ interface Ticket {
   book_status: string | null; total_copies_sold: number | null; royalty_pending: number | null;
   assigned_to_name: string | null; created_at: string; updated_at: string;
 }
-interface Response { id: string; body: string; responder_name: string; created_at: string; }
+interface Response { id: string; body: string; responder_name: string; responder_role: 'author' | 'admin'; created_at: string; }
 interface Note { id: string; body: string; author_name: string; created_at: string; }
 
 const STATUSES = ['Open', 'In Progress', 'Resolved', 'Closed'];
@@ -76,7 +76,8 @@ export default function AdminTicketDetailPage({ params }: { params: Promise<{ id
     socket.emit('join:ticket', id);
 
     const onResponse = (data: Response & { ticket_id: string }) => {
-      if (data.ticket_id === id || !data.ticket_id) setResponses(prev => [...prev, data]);
+      if (data.ticket_id === id || !data.ticket_id)
+        setResponses(prev => prev.some(r => r.id === data.id) ? prev : [...prev, data]);
     };
     const onNote = (data: Note & { ticket_id: string }) => {
       if (data.ticket_id === id) setNotes(prev => [...prev, data]);
@@ -154,23 +155,26 @@ export default function AdminTicketDetailPage({ params }: { params: Promise<{ id
             </div>
 
             {/* Response thread */}
-            {responses.map(r => (
-              <div key={r.id} className="bg-white border border-gray-200 rounded-xl p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-[#1a3a5c] flex items-center justify-center text-white text-xs font-bold">
-                      {r.responder_name[0]}
+            {responses.map(r => {
+              const isAuthor = r.responder_role === 'author';
+              return (
+                <div key={r.id} className={`border rounded-xl p-5 ${isAuthor ? 'bg-indigo-50 border-indigo-100' : 'bg-white border-gray-200'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${isAuthor ? 'bg-indigo-500' : 'bg-[#1a3a5c]'}`}>
+                        {r.responder_name[0]}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">{r.responder_name}</p>
+                        <p className="text-xs text-gray-400">{isAuthor ? 'Author' : 'BookLeaf Support'}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">{r.responder_name}</p>
-                      <p className="text-xs text-gray-400">BookLeaf Support</p>
-                    </div>
+                    <span className="text-xs text-gray-400">{fmtDate(r.created_at)}</span>
                   </div>
-                  <span className="text-xs text-gray-400">{fmtDate(r.created_at)}</span>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{r.body}</p>
                 </div>
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{r.body}</p>
-              </div>
-            ))}
+              );
+            })}
 
             {/* Reply / Notes tabs */}
             <div className="bg-white border border-gray-200 rounded-xl p-5">

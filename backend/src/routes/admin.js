@@ -109,7 +109,8 @@ router.get('/tickets/:id', async (req, res, next) => {
     const [responses, notes] = await Promise.all([
       db.select({
           id: ticketResponses.id, body: ticketResponses.body,
-          created_at: ticketResponses.created_at, responder_name: users.name,
+          created_at: ticketResponses.created_at,
+          responder_name: users.name, responder_role: users.role,
         })
         .from(ticketResponses)
         .innerJoin(users, eq(users.id, ticketResponses.responder_id))
@@ -224,7 +225,7 @@ router.post('/tickets/:id/responses', async (req, res, next) => {
       .values({ ticket_id: req.params.id, responder_id: req.user.id, body: parsed.data.body })
       .returning();
 
-    const response = { ...row, responder_name: req.user.name };
+    const response = { ...row, responder_name: req.user.name, responder_role: 'admin' };
 
     // Auto-advance status from Open → In Progress on first admin reply
     await db
@@ -235,7 +236,8 @@ router.post('/tickets/:id/responses', async (req, res, next) => {
     const io = req.app.get('io');
     if (io) {
       const authorId = existing[0].author_id;
-      io.to(`ticket:${req.params.id}`).emit('ticket:response', response);
+      // Emit to each room once — no ticket:<id> emit to avoid duplicates
+      // (admin is in both 'admin' and 'ticket:<id>' rooms on the detail page)
       io.to(`author:${authorId}`).emit('ticket:response', { ticket_id: req.params.id, ...response });
       io.to('admin').emit('ticket:response', { ticket_id: req.params.id, ...response });
     }

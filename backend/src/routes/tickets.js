@@ -144,7 +144,8 @@ router.get('/:id', async (req, res, next) => {
     const responses = await db
       .select({
         id: ticketResponses.id, body: ticketResponses.body,
-        created_at: ticketResponses.created_at, responder_name: users.name,
+        created_at: ticketResponses.created_at,
+        responder_name: users.name, responder_role: users.role,
       })
       .from(ticketResponses)
       .innerJoin(users, eq(users.id, ticketResponses.responder_id))
@@ -152,6 +153,47 @@ router.get('/:id', async (req, res, next) => {
       .orderBy(asc(ticketResponses.created_at));
 
     res.json({ ticket: result[0], responses });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/tickets/:id/replies — author follow-up message on their own ticket
+router.post('/:id/replies', async (req, res, next) => {
+  try {
+    const parsed = z.object({ body: z.string().min(1).max(10000) }).safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: z.flattenError(parsed.error).fieldErrors,
+      });
+    }
+
+    const existing = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(and(eq(tickets.id, req.params.id), eq(tickets.author_id, req.user.id)))
+      .limit(1);
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    const [row] = await db
+      .insert(ticketResponses)
+      .values({ ticket_id: req.params.id, responder_id: req.user.id, body: parsed.data.body })
+      .returning();
+
+    const response = { ...row, responder_name: req.user.name, responder_role: 'author' };
+
+    const io = req.app.get('io');
+    if (io) {
+      // Author gets echo via ticket room; admin gets notification via admin room
+      io.to(`ticket:${req.params.id}`).emit('ticket:response', { ticket_id: req.params.id, ...response });
+      io.to('admin').emit('ticket:response', { ticket_id: req.params.id, ...response });
+    }
+
+    res.status(201).json({ response });
   } catch (err) {
     next(err);
   }
