@@ -188,9 +188,9 @@ router.post('/:id/replies', async (req, res, next) => {
 
     const io = req.app.get('io');
     if (io) {
-      // Author gets echo via ticket room; admin gets notification via admin room
+      // ticket:<id> covers both the author echo AND the admin detail page (admin joins that room)
+      // Do NOT also emit to 'admin' — admin is in ticket:<id> so that would cause a duplicate
       io.to(`ticket:${req.params.id}`).emit('ticket:response', { ticket_id: req.params.id, ...response });
-      io.to('admin').emit('ticket:response', { ticket_id: req.params.id, ...response });
     }
 
     res.status(201).json({ response });

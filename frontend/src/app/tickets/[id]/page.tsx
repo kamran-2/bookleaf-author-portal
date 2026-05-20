@@ -57,9 +57,8 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
     socket.emit('join:ticket', id);
     socket.emit('join:author', user.id);
 
-    // Deduplicate by ID — prevents double-append when author is in both
-    // ticket:<id> and author:<id> rooms simultaneously
     const onResponse = (data: Response & { ticket_id?: string }) => {
+      if (data.ticket_id && data.ticket_id !== id) return;
       setResponses(prev => prev.some(r => r.id === data.id) ? prev : [...prev, data]);
     };
     const onUpdated = (data: { id: string; status: string }) => {
